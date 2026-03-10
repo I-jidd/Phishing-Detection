@@ -174,6 +174,7 @@ for key, default in [
     ('last_prediction',     None),
     ('last_confidence',     None),
     ('last_feature_values', None),
+    ('website_title',       ''),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
@@ -321,9 +322,19 @@ def generate_report(prompt: str) -> str:
     if gemini_client is None:
         return f"**Gemini unavailable:** {gemini_error}"
     try:
+        system_instr = (
+            "You are a cybersecurity analyst writing precise, evidence-based prescriptive reports. "
+            "You follow instructions exactly. Write only the sections requested. "
+            "Never add unrequested content, introductions, or conclusions. "
+            "Always reference the specific website by name and use the exact numbers provided."
+        )
         response = gemini_client.models.generate_content(
             model="gemini-2.5-flash",
             contents=prompt,
+            config=types.GenerateContentConfig(
+                system_instruction=system_instr,
+                temperature=0.1,
+            )
         )
         return response.text
     except Exception as e:
@@ -357,119 +368,65 @@ def get_recommendation(prediction, confidence):
 # PROMPT BUILDER
 # ─────────────────────────────────────────────────────────────────────────────
 
-def get_prediction_context() -> str:
-    """Returns a description of the last website analysis result for the report prompt."""
-    pred = st.session_state.get("last_prediction")
-    conf = st.session_state.get("last_confidence")
-    vals = st.session_state.get("last_feature_values")
+def build_prompt(tone: str, language: str) -> str:
+    pred  = st.session_state.get("last_prediction")
+    conf  = st.session_state.get("last_confidence")
+    vals  = st.session_state.get("last_feature_values") or {}
+    title = st.session_state.get("website_title", "").strip() or "the analyzed website"
 
     if pred is None:
-        return "No website has been analyzed yet in this session."
-
-    pred_label = "PHISHING" if pred == 1 else "LEGITIMATE"
-    rec        = get_recommendation(pred, conf)
-
-    # summarize which features were flagged
-    if vals:
-        phishing_feats = [FEATURE_LABELS.get(f, f) for f, v in vals.items() if v ==  1]
-        suspi_feats    = [FEATURE_LABELS.get(f, f) for f, v in vals.items() if v ==  0]
-        legit_feats    = [FEATURE_LABELS.get(f, f) for f, v in vals.items() if v == -1]
-    else:
-        phishing_feats = suspi_feats = legit_feats = []
-
-    return f"""
-ANALYZED WEBSITE RESULT:
-- Prediction:   {pred_label}
-- Confidence:   {conf:.2%}
-- Risk Priority:{rec['priority']}
-- Action:       {rec['action']}
-
-FEATURE BREAKDOWN:
-- Phishing indicators  ({len(phishing_feats)}/30): {', '.join(phishing_feats) if phishing_feats else 'None'}
-- Suspicious indicators({len(suspi_feats)}/30):    {', '.join(suspi_feats)    if suspi_feats    else 'None'}
-- Legitimate indicators({len(legit_feats)}/30):    {', '.join(legit_feats[:8]) + ('...' if len(legit_feats) > 8 else '') if legit_feats else 'None'}
-"""
-
-def build_prompt(report_type: str, tone: str, sections: dict, language: str,
-                 prediction_context: str, custom_override: str = "") -> str:
-    if custom_override.strip():
-        return custom_override
-
-    active = [k for k, v in sections.items() if v]
-    sections_str = ", ".join(active) if active else "all sections"
-
-    other_str = "\n".join(
-        f"  - {n}: Accuracy={m['Accuracy']:.4f}, F1={m['F1-Score']:.4f}, ROC-AUC={m['ROC-AUC']:.4f}"
-        for n, m in MODEL_RESULTS.items() if n != BEST_MODEL_NAME
-    )
-    top_feats = ", ".join(f"{f} ({v:.3f})" for f, v in list(FEATURE_IMPORTANCE.items())[:7])
+        return "No website analyzed yet."
 
     tone_guide = {
-        "Academic":  "Use formal academic language with technical terminology, passive voice where appropriate, and rigorous methodology references.",
-        "Business":  "Use professional but accessible language. Focus on risk, business impact, and actionable insights. Avoid heavy jargon.",
-        "Technical": "Use precise technical language for ML engineers. Include statistical details, methodology decisions, and implementation notes.",
-    }
-    type_guide = {
-        "Executive Summary":       "Write a concise 1–2 paragraph summary. Focus on results and bottom-line impact only.",
-        "Detailed Analysis":       "Write a comprehensive multi-section analysis with headers, bullet points, and structured narrative.",
-        "Technical Documentation": "Write a thorough technical document covering methodology, validation, model selection rationale, and limitations.",
-        "Business Presentation":   "Write stakeholder-ready content with clear headers, highlighted key numbers, and business value framing.",
-    }
-    section_guidance = {
-        "Problem Statement":
-            "Describe the phishing detection problem, its security and business stakes, and why ML is an appropriate approach.",
-        "Dataset Description":
-            f"UCI Phishing Websites dataset: {EDA_FINDINGS['total_instances']:,} instances "
-            f"({EDA_FINDINGS['after_dedup']:,} after deduplication), 30 integer-encoded features (-1/0/1), "
-            f"binary target. Sources: PhishTank, MillerSmiles, Google.",
-        "EDA Findings":
-            f"{EDA_FINDINGS['duplicates_removed']:,} duplicates removed. "
-            f"Class balance: {EDA_FINDINGS['legitimate_pct']:.1f}% legitimate / "
-            f"{EDA_FINDINGS['phishing_pct']:.1f}% phishing — no resampling needed. "
-            f"No missing values. Top correlated features: {', '.join(EDA_FINDINGS['top_features'])}.",
-        "Model Performance":
-            f"Six models evaluated:\n{other_str}\n"
-            f"Best (tuned {BEST_MODEL_NAME}): Accuracy={BEST_METRICS['Accuracy']:.4f}, "
-            f"F1={BEST_METRICS['F1-Score']:.4f}, ROC-AUC={BEST_METRICS['ROC-AUC']:.4f}.",
-        "Best Model Justification":
-            f"SVM selected for highest tuned F1 ({BEST_METRICS['F1-Score']:.4f}) via GridSearchCV "
-            f"(best params: {BEST_METRICS['Best Params']}). Discuss precision/recall tradeoff in security contexts.",
-        "Prescriptive Recommendations":
-            "Decision logic: Phishing >0.8 conf → block immediately (Critical); "
-            "Phishing 0.6–0.8 → warn user (High); Legit >0.8 → allow + safety badge (Low); "
-            "Legit 0.6–0.8 → allow with caution (Medium); <0.6 conf → flag for manual review.",
-        "Limitations and Future Work":
-            "Dataset from 2012; phishing tactics have evolved. Feature encoding loses raw URL nuance. "
-            "Suggest: live URL scraping pipeline, deep learning on raw HTML, continual retraining.",
+        "Academic":  "Use formal academic language with technical terminology and rigorous structure.",
+        "Business":  "Use professional, accessible language focused on risk and actionable decisions.",
+        "Technical": "Use precise technical language suited for security engineers and ML practitioners.",
     }
 
-    guidance_blocks = "\n\n".join(
-        f"**{s}**: {section_guidance[s]}" for s in active if s in section_guidance
+    phishing_feats = [FEATURE_LABELS.get(f, f) for f, v in vals.items() if v ==  1]
+    suspi_feats    = [FEATURE_LABELS.get(f, f) for f, v in vals.items() if v ==  0]
+    legit_feats    = [FEATURE_LABELS.get(f, f) for f, v in vals.items() if v == -1]
+
+    rec        = get_recommendation(pred, conf)
+    pred_label = "PHISHING" if pred == 1 else "LEGITIMATE"
+    lang_note  = f"\n\nWrite the entire analysis in {language}." if language != "English" else ""
+
+    phishing_str = ", ".join(phishing_feats) if phishing_feats else "None"
+    suspi_str    = ", ".join(suspi_feats)    if suspi_feats    else "None"
+    legit_str    = ", ".join(legit_feats)    if legit_feats    else "None"
+
+    return (
+        f"You are a cybersecurity analyst. Write a prescriptive analysis report for the website below.\n"
+        f"TONE: {tone_guide.get(tone, tone_guide['Business'])}\n\n"
+        f"WEBSITE: \"{title}\"\n"
+        f"VERDICT: {pred_label}\n"
+        f"CONFIDENCE: {conf:.2%}\n"
+        f"RISK PRIORITY: {rec['priority']}\n"
+        f"RECOMMENDED ACTION: {rec['action']}\n\n"
+        f"FEATURE EVIDENCE (out of 30 total):\n"
+        f"- Phishing indicators ({len(phishing_feats)}): {phishing_str}\n"
+        f"- Suspicious indicators ({len(suspi_feats)}): {suspi_str}\n"
+        f"- Legitimate indicators ({len(legit_feats)}): {legit_str}\n\n"
+        f"MODEL: Tuned SVM (C=10, rbf kernel) — F1: 0.9413, Accuracy: 94.19%, ROC-AUC: 0.9841\n"
+        f"TOP GLOBAL FEATURES: sslfinal_state, url_of_anchor, web_traffic, having_sub_domain, request_url\n\n"
+        f"Write exactly these 4 sections and nothing else:\n\n"
+        f"## 1. Verdict Summary\n"
+        f"State whether \"{title}\" is {pred_label} with {conf:.2%} confidence and risk priority {rec['priority']}. "
+        f"Explain what this means in plain terms.\n\n"
+        f"## 2. Feature Evidence Analysis\n"
+        f"Explain the specific features that drove this verdict. For each phishing or suspicious indicator, "
+        f"describe why it is a red flag. If legitimate indicators exist, explain why they were outweighed.\n\n"
+        f"## 3. Risk Assessment\n"
+        f"Describe the real-world threat level and consequences. Connect the feature pattern to specific "
+        f"attack scenarios or risks this website poses to users.\n\n"
+        f"## 4. Recommended Actions\n"
+        f"List concrete actions based on the {rec['priority']} risk level:\n"
+        f"- Immediate: {rec['action']}\n"
+        f"- Short-term steps for the security team\n"
+        f"- Long-term preventive measures\n\n"
+        f"RULES: Write only these 4 sections. Reference \"{title}\" by name. "
+        f"Use exact numbers. Start with ## 1. immediately.{lang_note}"
     )
-
-    lang_note = f"\n\nIMPORTANT: Write the entire report in {language}." if language != "English" else ""
-
-    return f"""You are an expert in machine learning and cybersecurity writing a {report_type} for a phishing website detection project.
-
-TONE: {tone_guide.get(tone, tone_guide['Business'])}
-FORMAT: {type_guide.get(report_type, type_guide['Detailed Analysis'])}
-SECTIONS TO COVER: {sections_str}
-
-SECTION GUIDANCE:
-{guidance_blocks}
-
-TOP FEATURES (Random Forest importance): {top_feats}
-
-WEBSITE ANALYSIS CONTEXT:
-{prediction_context}
-If a specific website was analyzed, reference its actual result, confidence score, flagged features, and recommended action throughout the report where relevant. Make the report feel grounded in this specific case, not just generic.
-
-FORMATTING RULES:
-- Use Markdown formatting (##, ### headers, bullet points, bold key numbers)
-- No filler phrases like "It is worth noting" or "In conclusion"
-- Be direct, specific, and data-driven
-
-Now write the {report_type}:{lang_note}"""
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SIDEBAR
@@ -554,6 +511,18 @@ with tab1:
     if model is None:
         st.error("Model files not found. Place **best_model.joblib**, **scaler.joblib**, and **model_info.joblib** in the same folder as app.py.")
         st.stop()
+
+    # Website Name — display/labeling only, not used in prediction
+    t_col, _ = st.columns([3, 4])
+    with t_col:
+        _title_input = st.text_input(
+            "Website Name / Title",
+            value=st.session_state.website_title,
+            placeholder="e.g. paypal-secure-login.net",
+            key="website_title_input",
+            help="Used only for labeling the AI report — does not affect the prediction.",
+        )
+        st.session_state.website_title = _title_input
 
     st.markdown("##### Select -1 (Legitimate), 0 (Suspicious), or 1 (Phishing) for each website feature.")
 
@@ -682,29 +651,29 @@ with tab1:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 with tab2:
-    st.markdown("##### Generate professional reports from your actual model results using Google Gemini.")
+    st.markdown("##### AI-powered prescriptive analysis based on the website features and analyzer output.")
 
-    pred = st.session_state.get("last_prediction")
-    conf = st.session_state.get("last_confidence")
-    if pred is not None:
-        pred_label = "PHISHING" if pred == 1 else "LEGITIMATE"
-        pred_color = "#ff4757" if pred == 1 else "#00ff88"
+    _pred = st.session_state.get("last_prediction")
+    _conf = st.session_state.get("last_confidence")
+    _site = st.session_state.get("website_title", "").strip()
+
+    if _pred is not None:
+        _pl   = "PHISHING" if _pred == 1 else "LEGITIMATE"
+        _pc   = "#ff4757"  if _pred == 1 else "#00ff88"
+        _stxt = f" &nbsp;·&nbsp; <b style='color:#e8eaf0;'>{_site}</b>" if _site else ""
         st.markdown(f"""
         <div style='background:#131c30;border:1px solid #1e2a42;border-radius:10px;
-                    padding:0.8rem 1.2rem;margin-bottom:1rem;display:flex;
-                    align-items:center;gap:10px;'>
-            <span style='color:#7a8299;font-size:0.82rem;'>Report based on:</span>
-            <span style='color:{pred_color};font-family:Space Mono,monospace;
-                         font-size:0.85rem;font-weight:700;'>{pred_label}</span>
-            <span style='color:#7a8299;font-size:0.82rem;'>·</span>
-            <span style='color:#00d4ff;font-family:Space Mono,monospace;
-                         font-size:0.82rem;'>{conf:.2%} confidence</span>
-            <span style='color:#4a5270;font-size:0.78rem;margin-left:auto;'>
-                ← from Website Analyzer</span>
+                    padding:0.8rem 1.2rem;margin-bottom:1rem;display:flex;align-items:center;gap:10px;flex-wrap:wrap;'>
+            <span style='color:#7a8299;font-size:0.82rem;'>Analysis based on:</span>
+            <span style='color:{_pc};font-family:Space Mono,monospace;font-size:0.85rem;font-weight:700;'>{_pl}</span>
+            <span style='color:#00d4ff;font-family:Space Mono,monospace;font-size:0.82rem;'>{_conf:.2%} confidence</span>
+            <span style='color:#7a8299;font-size:0.82rem;'>{_stxt}</span>
+            <span style='color:#4a5270;font-size:0.78rem;margin-left:auto;'>← from Website Analyzer</span>
         </div>
         """, unsafe_allow_html=True)
     else:
-        st.info("💡 Analyze a website first in the **Website Analyzer** tab to generate a report based on its results. You can still generate a general report without it.")
+        st.warning("⚠️ No analysis yet. Go to **Website Analyzer**, set the features, and click **Analyze Website** first.")
+        st.stop()
 
     if gemini_client is None:
         st.error(f"Gemini is unavailable: **{gemini_error}**")
@@ -713,65 +682,35 @@ with tab2:
 
     st.divider()
 
-    # Report configuration
-    col_l, col_r = st.columns([1, 1])
-    with col_l:
-        st.markdown("#### ⚙️ Report Options")
-        report_type = st.selectbox("Report Type", [
-            "Executive Summary", "Detailed Analysis",
-            "Technical Documentation", "Business Presentation",
-        ])
-        tone     = st.radio("Tone", ["Academic", "Business", "Technical"], horizontal=True)
-        language = st.selectbox("Language", ["English", "Spanish", "French", "German", "Filipino"])
-
-    with col_r:
-        st.markdown("#### 📋 Sections to Include")
-        sections = {
-            "Problem Statement":            st.checkbox("Problem Statement",            True,  key="s1"),
-            "Dataset Description":          st.checkbox("Dataset Description",          True,  key="s2"),
-            "EDA Findings":                 st.checkbox("EDA Findings",                 True,  key="s3"),
-            "Model Performance":            st.checkbox("Model Performance",            True,  key="s4"),
-            "Best Model Justification":     st.checkbox("Best Model Justification",     True,  key="s5"),
-            "Prescriptive Recommendations": st.checkbox("Prescriptive Recommendations", True,  key="s6"),
-            "Limitations and Future Work":  st.checkbox("Limitations and Future Work",  False, key="s7"),
-        }
-
-    # Prompt editor
-    prediction_context = get_prediction_context()
-    auto_prompt = build_prompt(report_type, tone, sections, language, prediction_context)
-    with st.expander("✏️ Edit Prompt (Advanced)"):
-        st.markdown("<span style='color:#7a8299;font-size:0.8rem;'>Modify before sending. Leave as-is to use the auto-generated prompt.</span>", unsafe_allow_html=True)
-        custom_prompt_text = st.text_area(
-            "Prompt", value=auto_prompt, height=280, key="prompt_area",
-            label_visibility="collapsed",
-        )
-
-    final_prompt = custom_prompt_text.strip() if custom_prompt_text.strip() else auto_prompt
-    if language != "English" and "IMPORTANT: Write the entire report in" not in final_prompt:
-        final_prompt += f"\n\nIMPORTANT: Write the entire report in {language}."
+    opt1, opt2, _ = st.columns([2, 2, 3])
+    with opt1:
+        tone = st.radio("Writing Tone", ["Academic", "Business", "Technical"], key="r_tone")
+    with opt2:
+        language = st.selectbox("Language", ["English", "Spanish", "French", "German", "Filipino"], key="r_lang")
 
     st.markdown("")
-    g_col, _ = st.columns([2, 5])
-    with g_col:
-        gen_btn = st.button("🚀 Generate Report", type="primary", use_container_width=True)
+    gb_col, _ = st.columns([2, 5])
+    with gb_col:
+        gen_btn = st.button("🚀 Generate Prescriptive Analysis", type="primary", use_container_width=True)
 
     if gen_btn:
-        with st.spinner("✨ Gemini is writing your report..."):
+        final_prompt = build_prompt(tone, language)
+        with st.spinner("✨ Gemini is analyzing..."):
             report_out = generate_report(final_prompt)
         st.session_state.latest_report = report_out
         st.session_state.report_history.append({
-            "type":      report_type,
+            "site":      _site or "—",
             "tone":      tone,
             "language":  language,
             "content":   report_out,
             "timestamp": pd.Timestamp.now().strftime("%H:%M:%S"),
         })
 
-    # Display latest report
     if st.session_state.latest_report:
         report_text = st.session_state.latest_report
         st.divider()
-        st.markdown("### Generated Report")
+        _heading_site = f" — {_site}" if _site else ""
+        st.markdown(f"### 📋 Prescriptive Analysis{_heading_site}")
         st.markdown("""
         <div style='background:#0f1628;border:1px solid #1e2a42;border-radius:14px;
                     padding:2rem;margin-bottom:1rem;line-height:1.85;color:#e8eaf0;'>
@@ -779,45 +718,27 @@ with tab2:
         st.markdown(report_text)
         st.markdown("</div>", unsafe_allow_html=True)
 
-        # Export + actions row
-        ec1, ec2, ec3, ec4 = st.columns(4)
+        _slug = (_site or "website").lower().replace(" ", "_")[:30]
+        ec1, ec2, ec3 = st.columns(3)
         with ec1:
-            st.download_button(
-                "📥 Download .md", report_text,
-                file_name=f"phishing_report_{report_type.lower().replace(' ','_')}.md",
-                mime="text/markdown",
-            )
+            st.download_button("📥 Download .md", report_text,
+                file_name=f"analysis_{_slug}.md", mime="text/markdown")
         with ec2:
-            st.download_button(
-                "📄 Download .txt", report_text,
-                file_name=f"phishing_report_{report_type.lower().replace(' ','_')}.txt",
-                mime="text/plain",
-            )
+            st.download_button("📄 Download .txt", report_text,
+                file_name=f"analysis_{_slug}.txt", mime="text/plain")
         with ec3:
             if st.button("🔄 Regenerate", key="regen_btn"):
                 st.session_state.latest_report = None
                 st.rerun()
-        with ec4:
-            feedback = st.selectbox(
-                "Refine:", ["—", "Make it more technical", "Simplify language",
-                            "Make it shorter", "Add more data details"],
-                key="feedback_sel", label_visibility="collapsed",
-            )
-            if feedback != "—" and st.button("Apply", key="apply_fb"):
-                with st.spinner("Refining..."):
-                    refined = generate_report(final_prompt + f"\n\nAdditional instruction: {feedback}.")
-                st.session_state.latest_report = refined
-                st.rerun()
 
-    # Report history
     if st.session_state.report_history:
-        with st.expander(f"🕑 Report History ({len(st.session_state.report_history)} generated)"):
+        with st.expander(f"🕑 Analysis History ({len(st.session_state.report_history)} generated)"):
             for i, rep in enumerate(reversed(st.session_state.report_history[-6:])):
                 hc1, hc2 = st.columns([5, 1])
                 with hc1:
                     st.markdown(
                         f"<span style='color:#00d4ff;font-family:Space Mono,monospace;font-size:0.82rem;'>{rep['timestamp']}</span>"
-                        f"<span style='color:#7a8299;font-size:0.82rem;margin-left:10px;'>{rep['type']} · {rep['tone']} · {rep['language']}</span>",
+                        f"<span style='color:#7a8299;font-size:0.82rem;margin-left:10px;'>{rep.get('site','—')} · {rep['tone']} · {rep['language']}</span>",
                         unsafe_allow_html=True,
                     )
                 with hc2:
