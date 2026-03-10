@@ -328,9 +328,41 @@ def generate_report(prompt: str) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 # PROMPT BUILDER
 # ─────────────────────────────────────────────────────────────────────────────
+def get_prediction_context() -> str:
+    """Returns a description of the last website analysis result for the report prompt."""
+    pred = st.session_state.get("last_prediction")
+    conf = st.session_state.get("last_confidence")
+    vals = st.session_state.get("last_feature_values")
+
+    if pred is None:
+        return "No website has been analyzed yet in this session."
+
+    pred_label = "PHISHING" if pred == 1 else "LEGITIMATE"
+    rec        = get_recommendation(pred, conf)
+
+    # summarize which features were flagged
+    if vals:
+        phishing_feats = [FEATURE_LABELS.get(f, f) for f, v in vals.items() if v ==  1]
+        suspi_feats    = [FEATURE_LABELS.get(f, f) for f, v in vals.items() if v ==  0]
+        legit_feats    = [FEATURE_LABELS.get(f, f) for f, v in vals.items() if v == -1]
+    else:
+        phishing_feats = suspi_feats = legit_feats = []
+
+    return f"""
+ANALYZED WEBSITE RESULT:
+- Prediction:   {pred_label}
+- Confidence:   {conf:.2%}
+- Risk Priority:{rec['priority']}
+- Action:       {rec['action']}
+
+FEATURE BREAKDOWN:
+- Phishing indicators  ({len(phishing_feats)}/30): {', '.join(phishing_feats) if phishing_feats else 'None'}
+- Suspicious indicators({len(suspi_feats)}/30):    {', '.join(suspi_feats)    if suspi_feats    else 'None'}
+- Legitimate indicators({len(legit_feats)}/30):    {', '.join(legit_feats[:8]) + ('...' if len(legit_feats) > 8 else '') if legit_feats else 'None'}
+"""
 
 def build_prompt(report_type: str, tone: str, sections: dict, language: str,
-                 custom_override: str = "") -> str:
+                 prediction_context: str, custom_override: str = "") -> str:
     if custom_override.strip():
         return custom_override
 
@@ -398,6 +430,10 @@ SECTION GUIDANCE:
 {guidance_blocks}
 
 TOP FEATURES (Random Forest importance): {top_feats}
+
+WEBSITE ANALYSIS CONTEXT:
+{prediction_context}
+If a specific website was analyzed, reference its actual result, confidence score, flagged features, and recommended action throughout the report where relevant. Make the report feel grounded in this specific case, not just generic.
 
 FORMATTING RULES:
 - Use Markdown formatting (##, ### headers, bullet points, bold key numbers)
@@ -640,6 +676,28 @@ with tab1:
 with tab2:
     st.markdown("##### Generate professional reports from your actual model results using Google Gemini.")
 
+    pred = st.session_state.get("last_prediction")
+    conf = st.session_state.get("last_confidence")
+    if pred is not None:
+        pred_label = "PHISHING" if pred == 1 else "LEGITIMATE"
+        pred_color = "#ff4757" if pred == 1 else "#00ff88"
+        st.markdown(f"""
+        <div style='background:#131c30;border:1px solid #1e2a42;border-radius:10px;
+                    padding:0.8rem 1.2rem;margin-bottom:1rem;display:flex;
+                    align-items:center;gap:10px;'>
+            <span style='color:#7a8299;font-size:0.82rem;'>Report based on:</span>
+            <span style='color:{pred_color};font-family:Space Mono,monospace;
+                         font-size:0.85rem;font-weight:700;'>{pred_label}</span>
+            <span style='color:#7a8299;font-size:0.82rem;'>·</span>
+            <span style='color:#00d4ff;font-family:Space Mono,monospace;
+                         font-size:0.82rem;'>{conf:.2%} confidence</span>
+            <span style='color:#4a5270;font-size:0.78rem;margin-left:auto;'>
+                ← from Website Analyzer</span>
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        st.info("💡 Analyze a website first in the **Website Analyzer** tab to generate a report based on its results. You can still generate a general report without it.")
+
     if gemini_client is None:
         st.error(f"Gemini is unavailable: **{gemini_error}**")
         st.info("Add your API key to `.streamlit/secrets.toml`:\n```toml\nGEMINI_API_KEY = \"AIzaSy...\"\n```")
@@ -671,7 +729,8 @@ with tab2:
         }
 
     # Prompt editor
-    auto_prompt = build_prompt(report_type, tone, sections, language)
+    prediction_context = get_prediction_context()
+    auto_prompt = build_prompt(report_type, tone, sections, language, prediction_context)
     with st.expander("✏️ Edit Prompt (Advanced)"):
         st.markdown("<span style='color:#7a8299;font-size:0.8rem;'>Modify before sending. Leave as-is to use the auto-generated prompt.</span>", unsafe_allow_html=True)
         custom_prompt_text = st.text_area(
