@@ -169,8 +169,11 @@ hr { border-color: var(--border) !important; margin: 1.5rem 0 !important; }
 # ─────────────────────────────────────────────────────────────────────────────
 
 for key, default in [
-    ('report_history', []),
-    ('latest_report',  None),
+    ('report_history',      []),
+    ('latest_report',       None),
+    ('last_prediction',     None),
+    ('last_confidence',     None),
+    ('last_feature_values', None),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
@@ -291,6 +294,7 @@ def load_model():
 
 model, scaler, model_info = load_model()
 
+
 # ─────────────────────────────────────────────────────────────────────────────
 # GEMINI  — loaded from .streamlit/secrets.toml, never shown in the UI
 # ─────────────────────────────────────────────────────────────────────────────
@@ -326,8 +330,33 @@ def generate_report(prompt: str) -> str:
         return f"**Error generating report:** {str(e)}"
 
 # ─────────────────────────────────────────────────────────────────────────────
+# PRESCRIPTIVE RECOMMENDATION LOGIC
+# ─────────────────────────────────────────────────────────────────────────────
+
+def get_recommendation(prediction, confidence):
+    if confidence < 0.6:
+        return {"priority":"REVIEW",   "icon":"🔍","action":"Flag for Manual Review",
+                "message":"Model confidence is low. Manual inspection recommended.",
+                "color":"#7a8299","bg":"rgba(122,130,153,0.10)"}
+    if prediction == 1:
+        if confidence > 0.8:
+            return {"priority":"CRITICAL","icon":"🚫","action":"Block Immediately & Alert User",
+                    "message":"High-confidence phishing site. Block and notify the user.",
+                    "color":"#ff4757","bg":"rgba(255,71,87,0.10)"}
+        return     {"priority":"HIGH",   "icon":"⚠️","action":"Display Warning — Require Confirmation",
+                    "message":"Likely phishing. Require explicit user confirmation before proceeding.",
+                    "color":"#ffa502","bg":"rgba(255,165,2,0.10)"}
+    if confidence > 0.8:
+        return     {"priority":"LOW",    "icon":"✅","action":"Allow Access — Display Safety Badge",
+                    "message":"Site appears legitimate. Display a safety indicator.",
+                    "color":"#00ff88","bg":"rgba(0,255,136,0.08)"}
+    return         {"priority":"MEDIUM", "icon":"🟡","action":"Allow with Caution — Monitor Behavior",
+                    "message":"Appears legitimate with moderate confidence. Monitor activity.",
+                    "color":"#ffdd59","bg":"rgba(255,221,89,0.08)"}
+# ─────────────────────────────────────────────────────────────────────────────
 # PROMPT BUILDER
 # ─────────────────────────────────────────────────────────────────────────────
+
 def get_prediction_context() -> str:
     """Returns a description of the last website analysis result for the report prompt."""
     pred = st.session_state.get("last_prediction")
@@ -441,31 +470,6 @@ FORMATTING RULES:
 - Be direct, specific, and data-driven
 
 Now write the {report_type}:{lang_note}"""
-
-# ─────────────────────────────────────────────────────────────────────────────
-# PRESCRIPTIVE RECOMMENDATION LOGIC
-# ─────────────────────────────────────────────────────────────────────────────
-
-def get_recommendation(prediction, confidence):
-    if confidence < 0.6:
-        return {"priority":"REVIEW",   "icon":"🔍","action":"Flag for Manual Review",
-                "message":"Model confidence is low. Manual inspection recommended.",
-                "color":"#7a8299","bg":"rgba(122,130,153,0.10)"}
-    if prediction == 1:
-        if confidence > 0.8:
-            return {"priority":"CRITICAL","icon":"🚫","action":"Block Immediately & Alert User",
-                    "message":"High-confidence phishing site. Block and notify the user.",
-                    "color":"#ff4757","bg":"rgba(255,71,87,0.10)"}
-        return     {"priority":"HIGH",   "icon":"⚠️","action":"Display Warning — Require Confirmation",
-                    "message":"Likely phishing. Require explicit user confirmation before proceeding.",
-                    "color":"#ffa502","bg":"rgba(255,165,2,0.10)"}
-    if confidence > 0.8:
-        return     {"priority":"LOW",    "icon":"✅","action":"Allow Access — Display Safety Badge",
-                    "message":"Site appears legitimate. Display a safety indicator.",
-                    "color":"#00ff88","bg":"rgba(0,255,136,0.08)"}
-    return         {"priority":"MEDIUM", "icon":"🟡","action":"Allow with Caution — Monitor Behavior",
-                    "message":"Appears legitimate with moderate confidence. Monitor activity.",
-                    "color":"#ffdd59","bg":"rgba(255,221,89,0.08)"}
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SIDEBAR
@@ -582,6 +586,10 @@ with tab1:
         phishing_p = float(probs[1])
         legit_p    = float(probs[0])
         confidence = phishing_p if prediction == 1 else legit_p
+        
+        st.session_state.last_prediction     = int(prediction)
+        st.session_state.last_confidence     = float(confidence)
+        st.session_state.last_feature_values = dict(feature_values)
 
         rec        = get_recommendation(prediction, confidence)
         pred_label = "PHISHING DETECTED" if prediction == 1 else "LEGITIMATE WEBSITE"
