@@ -695,7 +695,7 @@ with tab2:
 
     if gen_btn:
         final_prompt = build_prompt(tone, language)
-        with st.spinner("✨ Gemini is analyzing..."):
+        with st.spinner(" Analyzing..."):
             report_out = generate_report(final_prompt)
         st.session_state.latest_report = report_out
         st.session_state.report_history.append({
