@@ -675,7 +675,7 @@ with tab2:
     with st.expander("✏️ Edit Prompt (Advanced)"):
         st.markdown("<span style='color:#7a8299;font-size:0.8rem;'>Modify before sending. Leave as-is to use the auto-generated prompt.</span>", unsafe_allow_html=True)
         custom_prompt_text = st.text_area(
-            "", value=auto_prompt, height=280, key="prompt_area",
+            "Prompt", value=auto_prompt, height=280, key="prompt_area",
             label_visibility="collapsed",
         )
 
@@ -779,7 +779,7 @@ with tab3:
             "Tuned ROC-AUC": f"{tuned['ROC-AUC']:.4f}" if tuned else "—",
             "Best Params":   tuned.get("Best Params", "—") if tuned else "—",
         })
-    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(rows), width='stretch', hide_index=True)
 
     st.divider()
     st.markdown(f"#### 🏆 Best Model: {BEST_MODEL_NAME} (tuned)")
