@@ -691,7 +691,7 @@ with tab2:
     st.markdown("")
     gb_col, _ = st.columns([2, 5])
     with gb_col:
-        gen_btn = st.button("🚀 Generate Prescriptive Analysis", type="primary", use_container_width=True)
+        gen_btn = st.button("Generate Prescriptive Analysis", type="primary", use_container_width=True)
 
     if gen_btn:
         final_prompt = build_prompt(tone, language)
