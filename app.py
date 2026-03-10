@@ -298,11 +298,16 @@ model, scaler, model_info = load_model()
 @st.cache_resource
 def load_gemini():
     try:
-        api_key = st.secrets["GEMINI_API_KEY"]
-        client  = genai.Client(api_key=api_key)
+        try:
+            api_key = st.secrets["GEMINI_API_KEY"]
+        except Exception:
+            api_key = os.environ.get("GEMINI_API_KEY", "")
+        
+        if not api_key:
+            return None, "GEMINI_API_KEY not set"
+        
+        client = genai.Client(api_key=api_key)
         return client, None
-    except KeyError:
-        return None, "GEMINI_API_KEY not found in .streamlit/secrets.toml"
     except Exception as e:
         return None, str(e)
 
