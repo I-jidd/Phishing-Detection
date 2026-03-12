@@ -193,11 +193,11 @@ MODEL_RESULTS = {
 }
 
 TUNED_RESULTS = {
-    "Decision Tree":  {"Accuracy": 0.9214, "F1-Score": 0.9178, "ROC-AUC": 0.9231, "Best Params": "max_depth=10, criterion=entropy"},
-    "Random Forest":  {"Accuracy": 0.9453, "F1-Score": 0.9421, "ROC-AUC": 0.9889, "Best Params": "n_estimators=200, max_depth=None"},
-    "KNN":            {"Accuracy": 0.9231, "F1-Score": 0.9196, "ROC-AUC": 0.9741, "Best Params": "n_neighbors=7, weights=distance"},
-    "Naive Bayes":    {"Accuracy": 0.6547, "F1-Score": 0.4466, "ROC-AUC": 0.9635, "Best Params": "var_smoothing=1e-9"},
-    "SVM":            {"Accuracy": 0.9419, "F1-Score": 0.9413, "ROC-AUC": 0.9841, "Best Params": "C=10, kernel=rbf, gamma=scale"},
+    "Decision Tree":  {"Accuracy": 0.9333, "F1-Score": 0.9295, "ROC-AUC": 0.9592, "Best Params": "max_depth=15, min_samples_split=5, criterion=entropy"},
+    "Random Forest":  {"Accuracy": 0.9419, "F1-Score": 0.9401, "ROC-AUC": 0.9881, "Best Params": "n_estimators=100, max_depth=None, min_samples_split=2"},
+    "KNN":            {"Accuracy": 0.9316, "F1-Score": 0.9292, "ROC-AUC": 0.9820, "Best Params": "metric=manhattan, n_neighbors=5, weights=uniform"},
+    "Naive Bayes":    {"Accuracy": 0.7333, "F1-Score": 0.6241, "ROC-AUC": 0.9635, "Best Params": "var_smoothing=1e-6"},
+    "SVM":            {"Accuracy": 0.9427, "F1-Score": 0.9413, "ROC-AUC": 0.9865, "Best Params": "C=10, kernel=rbf, gamma=auto"},
 }
 
 BEST_MODEL_NAME = "SVM"
